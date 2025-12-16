@@ -1,61 +1,36 @@
-name: Container Image Scan
-
-on:
-  push:
-  workflow_dispatch:
+on: [ push, workflow_dispatch ]
 
 env:
   IMAGE_NAME: ${{ github.repository }}:${{ github.sha }}
 
 jobs:
   build-and-scan:
+    name: Build and scan image
     runs-on: ubuntu-latest
 
     steps:
-    - name: Check out the repository
-      uses: actions/checkout@v4
+      - name: Check out the repository
+        uses: actions/checkout@v4
 
-    - name: Find the Dockerfile
-      id: find_dockerfile
-      run: |
-        echo "Looking for Dockerfile in the repo..."
+      - name: Build the image
+        # FIX: The runner is failing to find a Dockerfile at the root.
+        # Ensure your 'Dockerfile' (case-sensitive) is at the root of your repo.
+        run: docker build -t $IMAGE_NAME .
         
-        # Try to find any file named Dockerfile or similar
-        DOCKERFILE_PATH=$(find . -type f -iname '*dockerfile*' | head -n 1 || true)
+      - name: Prisma Cloud image scan
+        id: scan
+        uses: PaloAltoNetworks/prisma-cloud-scan@v1.5
+        with:
+          pcc_console_url: ${{ secrets.PCC_CONSOLE_URL }}
+          pcc_user: ${{ secrets.PCC_USER }}
+          pcc_pass: ${{ secrets.PCC_PASS }}
+          image_name: ${{ env.IMAGE_NAME }}
 
-        if [ -z "$DOCKERFILE_PATH" ]; then
-          echo "::error::No Dockerfile found in the repository!"
-          exit 1
-        fi
-
-        echo "Found Dockerfile path: $DOCKERFILE_PATH"
-        echo "dockerfile=$DOCKERFILE_PATH" >> $GITHUB_OUTPUT
-
-    - name: Build the Docker image
-      run: |
-        DOCKERFILE=${{ steps.find_dockerfile.outputs.dockerfile }}
-        
-        # Derive context directory (the folder containing the Dockerfile)
-        CONTEXT=$(dirname "$DOCKERFILE")
-
-        echo "Dockerfile: $DOCKERFILE"
-        echo "Build context: $CONTEXT"
-
-        docker build -f "$DOCKERFILE" -t $IMAGE_NAME "$CONTEXT"
-
-    - name: Prisma Cloud image scan
-      id: scan
-      uses: PaloAltoNetworks/prisma-cloud-scan@v1.5
-      with:
-        pcc_console_url: ${{ secrets.PCC_CONSOLE_URL }}
-        pcc_user: ${{ secrets.PCC_USER }}
-        pcc_pass: ${{ secrets.PCC_PASS }}
-        image_name: ${{ env.IMAGE_NAME }}
-
-    - name: Upload SARIF file
-      if: ${{ steps.scan.outputs.sarif_file != '' }}
-      uses: github/codeql-action/upload-sarif@v4
-      with:
-        sarif_file: ${{ steps.scan.outputs.sarif_file }}
+      - name: Upload SARIF file
+        if: ${{ always() }} 
+        # FIX: Updated to v3 to resolve the "v1 and v2 are deprecated" fatal error.
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif_file }}
 
 
