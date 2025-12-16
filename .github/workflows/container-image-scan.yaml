@@ -21,35 +21,29 @@ jobs:
           # 1) Find tracked Dockerfile (case-sensitive)
           DOCKERFILE_PATH="$(git ls-files | grep -E '(^|/)Dockerfile$' | head -n 1 || true)"
 
-          # 2) If not tracked, find any Dockerfile in workspace (case-sensitive)
+          # 2) If not tracked, find any Dockerfile in workspace
           if [[ -z "${DOCKERFILE_PATH}" ]]; then
             DOCKERFILE_PATH="$(find . -type f -name Dockerfile -print | sed 's|^\./||' | head -n 1 || true)"
           fi
 
-          # 3) If still not found, generate a fallback Dockerfile at repo root
+          # 3) If still not found, generate a fallback Dockerfile
           if [[ -z "${DOCKERFILE_PATH}" ]]; then
-            echo "::warning::Dockerfile not found. Generating a fallback Dockerfile at repo root for build+scan."
+            echo "::warning::Dockerfile not found. Generating fallback Dockerfile."
 
-            # IMPORTANT:
-            # - The heredoc lines (including EOF) must be inside the run: | block
-            # - EOF must have NO leading spaces in bash
             cat <<'EOF' > Dockerfile
-FROM alpine:3.20
+          FROM alpine:3.20
 
-WORKDIR /app
-COPY . /app
+          WORKDIR /app
+          COPY . /app
 
-CMD ["sh"]
-EOF
+          CMD ["sh"]
+          EOF
 
             DOCKERFILE_PATH="Dockerfile"
           fi
 
           CONTEXT_DIR="$(dirname "${DOCKERFILE_PATH}")"
           if [[ "${CONTEXT_DIR}" == "." ]]; then CONTEXT_DIR="."; fi
-
-          echo "Found/Using Dockerfile at: ${DOCKERFILE_PATH}"
-          echo "Using build context: ${CONTEXT_DIR}"
 
           echo "path=${DOCKERFILE_PATH}" >> "$GITHUB_OUTPUT"
           echo "context=${CONTEXT_DIR}" >> "$GITHUB_OUTPUT"
@@ -77,6 +71,7 @@ EOF
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.scan.outputs.sarif_file }}
+
 
 
 
