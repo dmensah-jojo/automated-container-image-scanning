@@ -1,4 +1,8 @@
-on: [ push, workflow_dispatch ]
+name: Container Image Scan
+
+on:
+  push:
+  workflow_dispatch:
 
 env:
   IMAGE_NAME: ${{ github.repository }}:${{ github.sha }}
@@ -14,26 +18,29 @@ jobs:
     - name: Find the Dockerfile
       id: find_dockerfile
       run: |
-        # look for Dockerfile in the repo
-        DOCKERFILE_PATH=$(find . -type f -iname 'Dockerfile' | head -n 1 || true)
+        echo "Looking for Dockerfile in the repo..."
+        
+        # Try to find any file named Dockerfile or similar
+        DOCKERFILE_PATH=$(find . -type f -iname '*dockerfile*' | head -n 1 || true)
 
         if [ -z "$DOCKERFILE_PATH" ]; then
-          echo "No Dockerfile found!"
+          echo "::error::No Dockerfile found in the repository!"
           exit 1
         fi
 
-        echo "Found Dockerfile: $DOCKERFILE_PATH"
+        echo "Found Dockerfile path: $DOCKERFILE_PATH"
         echo "dockerfile=$DOCKERFILE_PATH" >> $GITHUB_OUTPUT
 
-    - name: Build the image
+    - name: Build the Docker image
       run: |
-        # get the path
         DOCKERFILE=${{ steps.find_dockerfile.outputs.dockerfile }}
-
-        # get directory for context
+        
+        # Derive context directory (the folder containing the Dockerfile)
         CONTEXT=$(dirname "$DOCKERFILE")
 
-        echo "Building with Dockerfile: $DOCKERFILE"
+        echo "Dockerfile: $DOCKERFILE"
+        echo "Build context: $CONTEXT"
+
         docker build -f "$DOCKERFILE" -t $IMAGE_NAME "$CONTEXT"
 
     - name: Prisma Cloud image scan
@@ -50,4 +57,5 @@ jobs:
       uses: github/codeql-action/upload-sarif@v4
       with:
         sarif_file: ${{ steps.scan.outputs.sarif_file }}
+
 
