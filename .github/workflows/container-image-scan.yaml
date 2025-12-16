@@ -14,7 +14,7 @@ jobs:
 
       - name: Build the image
         # FIX 1: Updated the path to match the actual folder name in your logs
-        run: docker build -t $IMAGE_NAME ./prisma-cloud-scan-automated-container-image-scanning
+        run: docker build -t $IMAGE_NAME .
         
       - name: Prisma Cloud image scan
         id: scan
