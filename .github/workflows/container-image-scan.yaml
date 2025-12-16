@@ -13,6 +13,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build the image
+        # FIX 1: Updated the path to match the actual folder name in your logs
         run: docker build -t $IMAGE_NAME ./prisma-cloud-scan-automated-container-image-scanning
         
       - name: Prisma Cloud image scan
@@ -24,9 +25,9 @@ jobs:
           pcc_pass: ${{ secrets.PCC_PASS }}
           image_name: ${{ env.IMAGE_NAME }}
 
-      # (Optional) for compatibility with GitHub's code scanning alerts
       - name: Upload SARIF file
-        if: ${{ always() }} # necessary if using failure thresholds in the image scan
+        if: ${{ always() }} 
+        # FIX 2: Updated to v4 to resolve the deprecation error for v1/v2/v3
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.scan.outputs.sarif_file }}
