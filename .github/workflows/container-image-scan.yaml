@@ -11,8 +11,30 @@ jobs:
     - name: Check out the repository
       uses: actions/checkout@v4
 
+    - name: Find the Dockerfile
+      id: find_dockerfile
+      run: |
+        # look for Dockerfile in the repo
+        DOCKERFILE_PATH=$(find . -type f -iname 'Dockerfile' | head -n 1 || true)
+
+        if [ -z "$DOCKERFILE_PATH" ]; then
+          echo "No Dockerfile found!"
+          exit 1
+        fi
+
+        echo "Found Dockerfile: $DOCKERFILE_PATH"
+        echo "dockerfile=$DOCKERFILE_PATH" >> $GITHUB_OUTPUT
+
     - name: Build the image
-      run: docker build -f Dockerfile -t $IMAGE_NAME .
+      run: |
+        # get the path
+        DOCKERFILE=${{ steps.find_dockerfile.outputs.dockerfile }}
+
+        # get directory for context
+        CONTEXT=$(dirname "$DOCKERFILE")
+
+        echo "Building with Dockerfile: $DOCKERFILE"
+        docker build -f "$DOCKERFILE" -t $IMAGE_NAME "$CONTEXT"
 
     - name: Prisma Cloud image scan
       id: scan
@@ -28,3 +50,4 @@ jobs:
       uses: github/codeql-action/upload-sarif@v4
       with:
         sarif_file: ${{ steps.scan.outputs.sarif_file }}
+
