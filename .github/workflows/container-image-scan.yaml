@@ -1,4 +1,4 @@
-on: [ push, workflow_dispatch ]
+on: [push, workflow_dispatch]
 
 env:
   IMAGE_NAME: ${{ github.repository }}:${{ github.sha }}
@@ -12,11 +12,38 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
 
+      - name: Locate Dockerfile
+        id: dockerfile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Find a file named exactly "Dockerfile" (case-sensitive), anywhere in the repo.
+          DOCKERFILE_PATH="$(git ls-files | grep -E '(^|/)Dockerfile$' | head -n 1 || true)"
+
+          if [[ -z "${DOCKERFILE_PATH}" ]]; then
+            echo "::error::Dockerfile not found. Ensure a file named 'Dockerfile' exists (case-sensitive)."
+            exit 1
+          fi
+
+          CONTEXT_DIR="$(dirname "${DOCKERFILE_PATH}")"
+          if [[ "${CONTEXT_DIR}" == "." ]]; then CONTEXT_DIR="."; fi
+
+          echo "Found Dockerfile at: ${DOCKERFILE_PATH}"
+          echo "Using build context: ${CONTEXT_DIR}"
+
+          echo "path=${DOCKERFILE_PATH}" >> "${GITHUB_OUTPUT}"
+          echo "context=${CONTEXT_DIR}" >> "${GITHUB_OUTPUT}"
+
       - name: Build the image
-        # FIX: The runner is failing to find a Dockerfile at the root.
-        # Ensure your 'Dockerfile' (case-sensitive) is at the root of your repo.
-        run: docker build -t $IMAGE_NAME .
-        
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            -t "${IMAGE_NAME}" \
+            -f "${{ steps.dockerfile.outputs.path }}" \
+            "${{ steps.dockerfile.outputs.context }}"
+
       - name: Prisma Cloud image scan
         id: scan
         uses: PaloAltoNetworks/prisma-cloud-scan@v1.5
@@ -27,10 +54,11 @@ jobs:
           image_name: ${{ env.IMAGE_NAME }}
 
       - name: Upload SARIF file
-        if: ${{ always() }} 
-        # FIX: Updated to v3 to resolve the "v1 and v2 are deprecated" fatal error.
+        # Only run if the scan step produced a SARIF output
+        if: ${{ always() && steps.scan.outputs.sarif_file != '' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.scan.outputs.sarif_file }}
+
 
 
