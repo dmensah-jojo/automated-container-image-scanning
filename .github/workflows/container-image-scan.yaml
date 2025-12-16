@@ -21,15 +21,18 @@ jobs:
           # 1) Find tracked Dockerfile (case-sensitive)
           DOCKERFILE_PATH="$(git ls-files | grep -E '(^|/)Dockerfile$' | head -n 1 || true)"
 
-          # 2) If not tracked, find any Dockerfile in workspace
+          # 2) If not tracked, find any Dockerfile in workspace (case-sensitive)
           if [[ -z "${DOCKERFILE_PATH}" ]]; then
             DOCKERFILE_PATH="$(find . -type f -name Dockerfile -print | sed 's|^\./||' | head -n 1 || true)"
           fi
 
-          # 3) If still not found, generate one at repo root
+          # 3) If still not found, generate a fallback Dockerfile at repo root
           if [[ -z "${DOCKERFILE_PATH}" ]]; then
             echo "::warning::Dockerfile not found. Generating a fallback Dockerfile at repo root for build+scan."
 
+            # IMPORTANT:
+            # - The heredoc lines (including EOF) must be inside the run: | block
+            # - EOF must have NO leading spaces in bash
             cat <<'EOF' > Dockerfile
 FROM alpine:3.20
 
@@ -48,8 +51,8 @@ EOF
           echo "Found/Using Dockerfile at: ${DOCKERFILE_PATH}"
           echo "Using build context: ${CONTEXT_DIR}"
 
-          echo "path=${DOCKERFILE_PATH}" >> "${GITHUB_OUTPUT}"
-          echo "context=${CONTEXT_DIR}" >> "${GITHUB_OUTPUT}"
+          echo "path=${DOCKERFILE_PATH}" >> "$GITHUB_OUTPUT"
+          echo "context=${CONTEXT_DIR}" >> "$GITHUB_OUTPUT"
 
       - name: Build the image
         shell: bash
@@ -74,6 +77,8 @@ EOF
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.scan.outputs.sarif_file }}
+
+
 
 
 
