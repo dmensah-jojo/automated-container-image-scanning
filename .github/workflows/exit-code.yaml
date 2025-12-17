@@ -1,0 +1,111 @@
+on: [push, workflow_dispatch]
+
+env:
+  IMAGE_NAME: ${{ github.repository }}:${{ github.sha }}
+
+jobs:
+  build-and-scan:
+    name: Build and scan image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Locate or generate Dockerfile
+        id: dockerfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 1) Find tracked Dockerfile (case-sensitive)
+          DOCKERFILE_PATH="$(git ls-files | grep -E '(^|/)Dockerfile$' | head -n 1 || true)"
+          # 2) If not tracked, find any Dockerfile in workspace
+          if [[ -z "${DOCKERFILE_PATH}" ]]; then
+            DOCKERFILE_PATH="$(find . -type f -name Dockerfile -print | sed 's|^\./||' | head -n 1 || true)"
+          fi
+          # 3) If still not found, generate a fallback Dockerfile
+          if [[ -z "${DOCKERFILE_PATH}" ]]; then
+            echo "::warning::Dockerfile not found. Generating fallback Dockerfile."
+            cat <<'EOF' > Dockerfile
+          FROM alpine:3.20
+          WORKDIR /app
+          COPY . /app
+          CMD ["sh"]
+          EOF
+            DOCKERFILE_PATH="Dockerfile"
+          fi
+          CONTEXT_DIR="$(dirname "${DOCKERFILE_PATH}")"
+          if [[ "${CONTEXT_DIR}" == "." ]]; then CONTEXT_DIR="."; fi
+          echo "path=${DOCKERFILE_PATH}" >> "$GITHUB_OUTPUT"
+          echo "context=${CONTEXT_DIR}" >> "$GITHUB_OUTPUT"
+
+      - name: Build the image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            -t "${IMAGE_NAME}" \
+            -f "${{ steps.dockerfile.outputs.path }}" \
+            "${{ steps.dockerfile.outputs.context }}"
+
+      # Install twistcli (uses the same runner cache path you showed in your logs)
+      - name: Install twistcli
+        id: twistcli
+        shell: bash
+        run: |
+          set -euo pipefail
+          TWISTCLI="/opt/hostedtoolcache/twistcli/34.03.138/x64/twistcli"
+
+          if [[ ! -x "$TWISTCLI" ]]; then
+            echo "::warning::twistcli not found at $TWISTCLI. Downloading from Prisma Cloud Console..."
+            mkdir -p "$(dirname "$TWISTCLI")"
+
+            # Download twistcli from your Prisma Cloud Console
+            # NOTE: This path is the common pattern. If your console uses a different endpoint,
+            # update the URL accordingly.
+            curl -fsSL -u "${{ secrets.PCC_USER }}:${{ secrets.PCC_PASS }}" \
+              "${{ secrets.PCC_CONSOLE_URL }}/api/v1/util/twistcli" \
+              -o "$TWISTCLI"
+
+            chmod +x "$TWISTCLI"
+          fi
+
+          echo "path=$TWISTCLI" >> "$GITHUB_OUTPUT"
+          "$TWISTCLI" --version || true
+
+      # Exit-code only gating: no JSON parsing, no custom parsing
+      - name: Prisma Cloud image scan (exit-code only)
+        shell: bash
+        env:
+          PCC_CONSOLE_URL: ${{ secrets.PCC_CONSOLE_URL }}
+          PCC_USER: ${{ secrets.PCC_USER }}
+          PCC_PASS: ${{ secrets.PCC_PASS }}
+        run: |
+          set -euo pipefail
+
+          # Optional output artifacts (not used for gating)
+          OUT_JSON="pcc_scan_results.json"
+          OUT_SARIF="pcc_scan_results.sarif"
+
+          # Run scan. Pipeline PASS/FAIL is based ONLY on exit code.
+          # If your environment supports SARIF output, keep --sarif-file; otherwise remove it.
+          "${{ steps.twistcli.outputs.path }}" images scan \
+            --address "${PCC_CONSOLE_URL}" \
+            --user "${PCC_USER}" \
+            --password "${PCC_PASS}" \
+            --details \
+            --output-file "${OUT_JSON}" \
+            --sarif-file "${OUT_SARIF}" \
+            "${IMAGE_NAME}" \
+            || exit 1
+
+          # Expose SARIF path for later steps if it exists
+          if [[ -f "${OUT_SARIF}" ]]; then
+            echo "SARIF_FILE=${OUT_SARIF}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload SARIF file
+        if: ${{ always() && env.SARIF_FILE != '' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ env.SARIF_FILE }}
