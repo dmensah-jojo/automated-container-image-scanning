@@ -1,0 +1,116 @@
+name: Build and scan image
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ${{ github.repository }}:${{ github.sha }}
+
+jobs:
+  build-and-scan:
+    name: Build and scan image
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write   # required for SARIF upload
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Locate or generate Dockerfile
+        id: dockerfile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # 1) Prefer a tracked Dockerfile (case-sensitive)
+          DOCKERFILE_PATH="$(git ls-files | grep -E '(^|/)Dockerfile$' | head -n 1 || true)"
+
+          # 2) If not tracked, look for any Dockerfile in workspace
+          if [[ -z "${DOCKERFILE_PATH}" ]]; then
+            DOCKERFILE_PATH="$(find . -type f -name Dockerfile -print | head -n 1 || true)"
+            # Normalize to relative path without leading ./ for consistency
+            DOCKERFILE_PATH="${DOCKERFILE_PATH#./}"
+          fi
+
+          # 3) If still not found, generate a fallback Dockerfile
+          if [[ -z "${DOCKERFILE_PATH}" ]]; then
+            echo "::warning::Dockerfile not found. Generating fallback Dockerfile."
+            cat > Dockerfile <<'EOF'
+          FROM alpine:3.20
+          WORKDIR /app
+          COPY . /app
+          CMD ["sh"]
+          EOF
+            DOCKERFILE_PATH="Dockerfile"
+          fi
+
+          # Compute build context = Dockerfile directory (or repo root)
+          CONTEXT_DIR="$(dirname "${DOCKERFILE_PATH}")"
+          if [[ "${CONTEXT_DIR}" == "." ]]; then CONTEXT_DIR="."; fi
+
+          echo "Using Dockerfile: ${DOCKERFILE_PATH}"
+          echo "Using build context: ${CONTEXT_DIR}"
+
+          echo "path=${DOCKERFILE_PATH}" >> "$GITHUB_OUTPUT"
+          echo "context=${CONTEXT_DIR}" >> "$GITHUB_OUTPUT"
+
+      - name: Build the image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            -t "${IMAGE_NAME}" \
+            -f "${{ steps.dockerfile.outputs.path }}" \
+            "${{ steps.dockerfile.outputs.context }}"
+
+      # IMPORTANT:
+      # - continue-on-error lets us ALWAYS upload SARIF
+      # - then we hard-fail the job in a later step based on steps.scan.outcome
+      - name: Prisma Cloud image scan
+        id: scan
+        uses: PaloAltoNetworks/prisma-cloud-scan@v1.5
+        continue-on-error: true
+        with:
+          pcc_console_url: ${{ secrets.PCC_CONSOLE_URL }}
+          pcc_user: ${{ secrets.PCC_USER }}
+          pcc_pass: ${{ secrets.PCC_PASS }}
+          image_name: ${{ env.IMAGE_NAME }}
+
+          # Optional: if your action supports these inputs, set your thresholds here.
+          # (Leave commented if your action version uses console-side policy only.)
+          #
+          # vuln_threshold: "high"         # examples: low|medium|high|critical
+          # compliance_threshold: "high"   # examples: low|medium|high|critical
+          #
+          # If your action supports "fail_on_*" style flags, set them true:
+          # fail_on_vulnerabilities: "true"
+          # fail_on_compliance: "true"
+
+      - name: Upload SARIF file
+        if: ${{ always() && steps.scan.outputs.sarif_file != '' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif_file }}
+
+      # This is the key: NO parsing of the full scan JSON.
+      # If Prisma threshold check fails, the scan step "outcome" is failure.
+      - name: Fail pipeline if Prisma thresholds are breached
+        if: ${{ steps.scan.outcome == 'failure' }}
+        shell: bash
+        run: |
+          echo "Prisma Cloud scan reported threshold failure (see scan step output)."
+          exit 1
+
+      # Optional: expose the JSON as an artifact for debugging (no parsing required)
+      - name: Upload scan JSON (optional)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-scan-results
+          path: |
+            pcc_scan_results.json
+          if-no-files-found: ignore
